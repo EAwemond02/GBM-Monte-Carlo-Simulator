@@ -43,3 +43,24 @@ Slider in action:
 0.05 Volatility: <img width="1395" height="593" alt="image" src="https://github.com/user-attachments/assets/ee54958c-59a6-48e1-973e-8e4128812669" />
 0.1 Volatility: <img width="1437" height="596" alt="image" src="https://github.com/user-attachments/assets/4fe54c9a-afaa-44a0-ae51-32efb75cdd01" />
 0.2 Volatility: <img width="1433" height="581" alt="image" src="https://github.com/user-attachments/assets/06cecc66-1a6f-44e1-9234-60d6dd424f54" />
+
+
+
+
+Option Pricing Methodology
+
+The engine calculates European Option prices through two different mathematical lenses to ensure model robustness.
+
+Analytical Method: Black-Scholes-Merton
+Using the standard BSM closed-form solution:
+C = S_0 N(d_1) - K e^{-rT} N(d_2)$$
+d_1 = np.exp((mu - 0.5 * sigma**2) + sigma * Z)
+
+Numerical Method: Monte Carlo Simulation
+The system simulates thousands of geometric Brownian motion paths under a risk-neutral measure (where drift = risk-free rate) to calculate the expected discounted payoff. This method provides the flexibility to handle more complex terminal payoffs beyond the standard European structure.
+
+The Greeks
+- Delta: Analytical Delta and Numerical delta.
+- Gamma: Central difference method with an underlying price bump.
+- Vega: Sensitivity to a 1% shift in annualized volatility.
+- Theta: Daily time decay calculated via a 1/252 time step.
