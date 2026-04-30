@@ -12,54 +12,70 @@ import matplotlib.pyplot as plt
 from matplotlib.widgets import Slider
 import numpy as np
 import yfinance as yf
-import pandas as pd
+from options import monte_carlo_call, monte_carlo_put, black_scholes_call, black_scholes_put, calculate_delta, calculate_gamma, calculate_theta, calculate_vega
+from simulation import run_simulation
+from analytics import calculate_drawdown, calculate_sharpe, calculate_var_es, calculate_prob_of_profit
 
-paths_count = 100
-trading_days = 252
+#Data
 tickers = ['SPY']
 start_date = '2021-01-01'
-np.random.seed(67)
 data = yf.download(tickers, start=start_date)
-print_debug = False
-print_summary = True
-
-#Log Returns
 Returns = np.log(data['Close']/data['Close'].shift(1))
 Returns = Returns.dropna()
-
 mu = Returns.mean().item()
 sigma = Returns.std().item()
 Starting_Price = data['Close'].iloc[-1].item()
+risk_free_rate = 0.04
+sigma_annual = sigma * np.sqrt(252)
+
+#Config
+paths_count = 1000
+trading_days = 252
+np.random.seed(67)
+print_debug = False
+print_summary = True
+print_options_summary = True
+
 if print_debug:
     print(mu, sigma)
 
-#Simulate
-Z = np.random.normal(size=(paths_count, trading_days))
-daily_returns = np.exp((mu - 0.5 * sigma**2) + sigma * Z)
-price_paths = np.zeros((paths_count, trading_days + 1))
-price_paths[:, 0] = Starting_Price
-for t in range(trading_days):
-    price_paths[:, t+1] = price_paths[:, t] * daily_returns[:, t]
-
-#Final price and Percentile
+#Simulate real world (for risk metrics)
+price_paths = run_simulation(paths_count, trading_days, mu, sigma, Starting_Price)
 final_prices = price_paths[:, -1]
-percentiles = [.05, .5, .95]
-percentile_calculations = []
-for i in range(len(percentiles)):
-    percentile_calculations = np.quantile(final_prices, percentiles)
-var = np.quantile(final_prices, 0.05)
-expected_shortfall = final_prices[final_prices < var].mean()
 
-#Sharpe Ratio
-sharpe = ((mu * 252) - 0.04) / (sigma * np.sqrt(252))
+#Simulate Risk neutral (for option pricing)
+price_paths_rn = run_simulation(paths_count, trading_days, risk_free_rate/252, sigma, Starting_Price)
+final_prices_rn = price_paths_rn[:, -1]
 
-#Drawdown
-def calculate_drawdown(equity_curve):
-    equity_curve = np.array(equity_curve)
-    running_peak = np.maximum.accumulate(equity_curve)
-    drawdowns = (running_peak - equity_curve) / running_peak
-    return np.max(drawdowns)
+#Options
+strike = Starting_Price  # At-the-money option
+T = 1
+h = 1
+option_type = 'call'
+call_price = monte_carlo_call(final_prices_rn, Starting_Price, risk_free_rate, T)
+put_price =  monte_carlo_put(final_prices_rn, Starting_Price, risk_free_rate, T)
+bs_call = black_scholes_call(Starting_Price, strike, T, risk_free_rate, sigma_annual)
+bs_put =  black_scholes_put(Starting_Price, strike, T, risk_free_rate, sigma_annual)
+call_at_S1 =     black_scholes_call(Starting_Price + 1, strike, T, risk_free_rate, sigma_annual)
+call_at_P1 =     black_scholes_call(Starting_Price, strike, T, risk_free_rate, sigma_annual + 0.01)
+call_at_T1 =     black_scholes_call(Starting_Price, strike, T - (1/252), risk_free_rate, sigma_annual)
+C_up   = black_scholes_call(Starting_Price + h, strike, T, risk_free_rate, sigma_annual)
+C_mid  = black_scholes_call(Starting_Price,     strike, T, risk_free_rate, sigma_annual)
+C_down = black_scholes_call(Starting_Price - h, strike, T, risk_free_rate, sigma_annual)
+
+#Options Calculations
+analytical_delta = calculate_delta(Starting_Price, strike, T, risk_free_rate, sigma_annual, option_type)
+numerical_delta = call_at_S1 - bs_call
+vega = calculate_vega(call_at_P1, bs_call)
+gamma = calculate_gamma(C_up, C_mid, C_down, h)
+theta = calculate_theta(call_at_T1, bs_call)
+
+#Analytics
+sharpe = calculate_sharpe(mu, sigma, risk_free_rate)
+var, es = calculate_var_es(final_prices)
+pop = calculate_prob_of_profit(final_prices, Starting_Price)
 drawdowns = [calculate_drawdown(path) for path in price_paths]
+percentiles = np.quantile(final_prices, [0.05, 0.50, 0.95])
 
 #Percentile path bands
 p5 = np.percentile(price_paths, 5, axis=0)
@@ -67,16 +83,24 @@ p50 = np.percentile(price_paths, 50, axis=0)
 p95 = np.percentile(price_paths, 95, axis=0)
 
 if print_summary:
-    print(
-        f"5th Percentile: {percentile_calculations[0]:,.2f}\n"
-        f"50th Percentile: {percentile_calculations[1]:,.2f}\n"
-        f"95th Percentile: {percentile_calculations[2]:,.2f}\n"
-        f"Expected Shortfall: {expected_shortfall:,.2f}\n"
-        f"Sharpe Ratio: {sharpe:,.3f}\n"
-        f"Average drawdown: {np.mean(drawdowns):,.2%}\n"
-        f"Worst Drawdown: {np.max(drawdowns):,.2%}\n"
-        f"Probability of Profit: {len(final_prices[final_prices > Starting_Price])/paths_count:,.2%}\n"
-    )
+    print(f"Sharpe Ratio: {sharpe:.3f}")
+    print(f"VaR (5th): {var:,.2f}")
+    print(f"Expected Shortfall: {es:,.2f}")
+    print(f"Avg Drawdown: {np.mean(drawdowns):.2%}")
+    print(f"Worst Drawdown: {np.max(drawdowns):.2%}")
+    print(f"Probability of Profit: {pop:.2%}")
+
+if print_options_summary:
+    print(f"BS Call Price:  {bs_call:,.2f}")
+    print(f"MC Call Price:  {call_price:,.2f}")
+    print(f"BS Put Price:   {bs_put:,.2f}")
+    print(f"MC Put Price:   {put_price:,.2f}")
+    print(f"Analytical Delta: {analytical_delta:,.2f}")
+    print(f"Numerical Delta: {numerical_delta:,.2f}")
+    print(f"Vega: ${vega:,.2f}")
+    print(f"Gamma: {gamma:.5f}")
+    print(f"Theta: {theta:.2f}")
+
 
 
 fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(12, 5))
